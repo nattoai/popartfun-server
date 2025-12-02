@@ -195,3 +195,5 @@ All necessary translations are already in place:
 The fix changes the cart icon from a link to the orders page to a button that opens the cart sidebar. This aligns user expectations with actual behavior: **clicking the cart icon now shows the cart**, not completed orders. Users can still access their orders through the user menu dropdown.
 
 
+
+

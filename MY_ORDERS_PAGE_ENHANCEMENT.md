@@ -246,3 +246,5 @@ cart.length === 0 && orders.length === 0 ? (...)
 The My Orders page now provides a complete view of the user's shopping journey - from pending items awaiting payment to completed orders being fulfilled. This creates a more intuitive and user-friendly experience.
 
 
+
+

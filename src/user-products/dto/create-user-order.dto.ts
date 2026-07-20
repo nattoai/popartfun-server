@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNumber, IsArray, IsObject, IsOptional, IsEmail, Min } from 'class-validator';
+import { IsString, IsNumber, IsArray, IsObject, IsOptional, IsEmail, Min, IsBoolean } from 'class-validator';
 
 export class OrderRecipientDto {
   @ApiProperty()
@@ -100,5 +100,21 @@ export class CreateUserOrderDto {
   @ApiPropertyOptional()
   @IsOptional()
   productConfig?: any[];
+
+  @ApiPropertyOptional({ description: 'Whether this is a test order' })
+  @IsOptional()
+  @IsBoolean()
+  isTest?: boolean;
+
+  @ApiPropertyOptional({ description: 'Applied discount code' })
+  @IsOptional()
+  @IsString()
+  discountCode?: string;
+
+  @ApiPropertyOptional({ description: 'Discount amount in dollars' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discountAmount?: number;
 }
 

@@ -24,6 +24,21 @@ export interface OrderItem {
   design?: any;
 }
 
+export interface StatusHistoryEntry {
+  status: string;
+  timestamp: Date;
+  note?: string;
+  updatedBy?: string; // 'system', 'admin', 'printful'
+}
+
+export interface RefundInfo {
+  refundId: string;
+  amount: number;
+  reason: string;
+  timestamp: Date;
+  status: 'pending' | 'completed' | 'failed';
+}
+
 @Schema({ timestamps: true })
 export class UserOrder {
   @Prop({ required: true, index: true })
@@ -49,6 +64,13 @@ export class UserOrder {
 
   @Prop({ default: 0 })
   total: number;
+
+  // Discount fields
+  @Prop()
+  discountCode?: string;
+
+  @Prop({ default: 0 })
+  discountAmount: number;
 
   @Prop({ default: 'pending' })
   status: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'failed';
@@ -76,10 +98,25 @@ export class UserOrder {
   trackingUrl: string;
 
   @Prop()
+  carrier: string; // Shipping carrier (USPS, UPS, FedEx, etc.)
+
+  @Prop()
   estimatedDelivery: Date;
+
+  @Prop({ type: Array, default: [] })
+  statusHistory: StatusHistoryEntry[];
+
+  @Prop()
+  printfulStatus: string; // Raw status from Printful
+
+  @Prop({ type: Object })
+  refundInfo?: RefundInfo;
 
   @Prop({ type: Object })
   metadata: Record<string, any>;
+
+  @Prop({ default: false })
+  isTest: boolean; // Flag for test orders
 }
 
 export const UserOrderSchema = SchemaFactory.createForClass(UserOrder);
@@ -89,4 +126,6 @@ UserOrderSchema.index({ userId: 1, createdAt: -1 });
 UserOrderSchema.index({ userId: 1, status: 1 });
 UserOrderSchema.index({ printfulOrderId: 1 });
 UserOrderSchema.index({ paymentIntentId: 1 });
+UserOrderSchema.index({ status: 1, createdAt: -1 }); // For admin order listing
+UserOrderSchema.index({ 'recipient.email': 1 }); // For customer email search
 

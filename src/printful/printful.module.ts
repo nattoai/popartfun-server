@@ -16,6 +16,8 @@ import {
   PrintfulOrder,
   PrintfulOrderSchema,
 } from './schemas/printful-order.schema';
+import { UserOrder, UserOrderSchema } from '../user-products/schemas/user-order.schema';
+import { CommonModule } from '../common/common.module';
 
 @Module({
   imports: [
@@ -23,7 +25,9 @@ import {
       { name: PrintfulConfig.name, schema: PrintfulConfigSchema },
       { name: PrintfulSyncProduct.name, schema: PrintfulSyncProductSchema },
       { name: PrintfulOrder.name, schema: PrintfulOrderSchema },
+      { name: UserOrder.name, schema: UserOrderSchema },
     ]),
+    CommonModule,
   ],
   controllers: [PrintfulController],
   providers: [PrintfulService, MockupService, StorageService],

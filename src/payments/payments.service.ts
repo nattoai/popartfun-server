@@ -38,6 +38,7 @@ export class PaymentsService {
         currency: currency.toLowerCase(),
         automatic_payment_methods: {
           enabled: true, // Enable cards, Apple Pay, Google Pay automatically
+          allow_redirects: 'never', // Disable redirect-based payment methods like Link
         },
         metadata: metadata || {},
       });
@@ -73,7 +74,7 @@ export class PaymentsService {
   }
 
   /**
-   * Confirm payment status (verify payment succeeded)
+   * Confirm payment status (verify payment succeeded or is processing)
    */
   async confirmPayment(paymentIntentId: string): Promise<boolean> {
     try {
@@ -81,7 +82,9 @@ export class PaymentsService {
 
       this.logger.log(`Payment intent ${paymentIntentId} status: ${paymentIntent.status}`);
 
-      return paymentIntent.status === 'succeeded';
+      // Accept both 'succeeded' and 'processing' as valid payment states
+      // 'processing' means the payment is being processed (async payment methods)
+      return paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing';
     } catch (error) {
       this.logger.error(`Failed to confirm payment: ${error.message}`);
       throw new BadRequestException(`Failed to confirm payment: ${error.message}`);
@@ -126,6 +129,16 @@ export class PaymentsService {
       this.logger.error(`Failed to refund payment: ${error.message}`);
       throw new BadRequestException(`Failed to refund payment: ${error.message}`);
     }
+  }
+
+  /**
+   * Create a refund (admin-initiated)
+   */
+  async createRefund(
+    paymentIntentId: string,
+    amountInCents: number,
+  ): Promise<Stripe.Refund> {
+    return this.refundPayment(paymentIntentId, amountInCents);
   }
 
   /**

@@ -69,10 +69,8 @@ export class ProductCategory {
 export const SiteTagSchema = SchemaFactory.createForClass(SiteTag);
 export const ProductCategorySchema = SchemaFactory.createForClass(ProductCategory);
 
-// Create indexes for efficient queries
-SiteTagSchema.index({ name: 1 });
+// Create compound indexes for efficient queries
+// Note: name indexes are already created by unique: true in @Prop decorator
 SiteTagSchema.index({ active: 1, sortOrder: 1 });
-
-ProductCategorySchema.index({ name: 1 });
 ProductCategorySchema.index({ active: 1, sortOrder: 1 });
 

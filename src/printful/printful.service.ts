@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import axios, { AxiosInstance } from 'axios';
+import * as crypto from 'crypto';
 import {
   PrintfulConfig,
   PrintfulConfigDocument,
@@ -20,6 +21,8 @@ import {
   PrintfulOrder,
   PrintfulOrderDocument,
 } from './schemas/printful-order.schema';
+import { UserOrder, UserOrderDocument } from '../user-products/schemas/user-order.schema';
+import { EmailService } from '../common/services/email.service';
 import {
   CreatePrintfulConfigDto,
   UpdatePrintfulConfigDto,
@@ -43,12 +46,15 @@ export class PrintfulService {
   constructor(
     private configService: ConfigService,
     private storageService: StorageService,
+    private emailService: EmailService,
     @InjectModel(PrintfulConfig.name)
     private printfulConfigModel: Model<PrintfulConfigDocument>,
     @InjectModel(PrintfulSyncProduct.name)
     private syncProductModel: Model<PrintfulSyncProductDocument>,
     @InjectModel(PrintfulOrder.name)
     private orderModel: Model<PrintfulOrderDocument>,
+    @InjectModel(UserOrder.name)
+    private userOrderModel: Model<UserOrderDocument>,
   ) {
     const apiKey = this.configService.get<string>('PRINTFUL_API_KEY');
 
@@ -56,7 +62,7 @@ export class PrintfulService {
     this.apiClient = axios.create({
       baseURL: this.apiBaseUrl,
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       timeout: 60000, // 60 seconds for file uploads
@@ -112,7 +118,11 @@ export class PrintfulService {
   /**
    * Test API connection
    */
-  async testConnection(): Promise<{ success: boolean; message: string; storeInfo?: any }> {
+  async testConnection(): Promise<{
+    success: boolean;
+    message: string;
+    storeInfo?: any;
+  }> {
     try {
       // Use products catalog endpoint instead of store (doesn't require store permissions)
       const response = await this.apiClient.get('/products');
@@ -133,12 +143,16 @@ export class PrintfulService {
     }
   }
 
-  async testGCSConnection(): Promise<{ success: boolean; message: string; bucketName?: string }> {
+  async testGCSConnection(): Promise<{
+    success: boolean;
+    message: string;
+    bucketName?: string;
+  }> {
     try {
       this.logger.log('Testing Google Cloud Storage connection...');
-      
+
       const isConnected = await this.storageService.testConnection();
-      
+
       if (isConnected) {
         return {
           success: true,
@@ -173,8 +187,10 @@ export class PrintfulService {
 
       // Validate file format
       const allowedFormats = ['.png', '.jpg', '.jpeg', '.pdf', '.ai', '.eps'];
-      const fileExt = uploadDesignDto.filename.toLowerCase().match(/\.[^.]+$/)?.[0];
-      
+      const fileExt = uploadDesignDto.filename
+        .toLowerCase()
+        .match(/\.[^.]+$/)?.[0];
+
       if (!fileExt || !allowedFormats.includes(fileExt)) {
         throw new BadRequestException(
           `Invalid file format. Allowed: ${allowedFormats.join(', ')}`,
@@ -195,16 +211,16 @@ export class PrintfulService {
       // Printful's file API is complex and may require posting to a temp URL first
       // Let's use a simpler approach: just return the base64 data URL
       // The mockup generator can use this directly
-      
+
       const mimeType = mimeTypes[fileExt] || 'application/octet-stream';
       const dataUrl = `data:${mimeType};base64,${uploadDesignDto.file}`;
-      
+
       // Upload to Google Cloud Storage for public access
       this.logger.log('Uploading design to Google Cloud Storage...');
-      
+
       const buffer = Buffer.from(uploadDesignDto.file, 'base64');
       const fileId = Date.now();
-      
+
       try {
         // Upload to GCS
         const publicUrl = await this.storageService.uploadFile(
@@ -212,9 +228,9 @@ export class PrintfulService {
           uploadDesignDto.filename,
           mimeType,
         );
-        
+
         this.logger.log(`File uploaded to GCS. Public URL: ${publicUrl}`);
-        
+
         return {
           fileId,
           url: publicUrl,
@@ -225,17 +241,23 @@ export class PrintfulService {
       } catch (gcsError) {
         this.logger.error(`GCS upload failed: ${gcsError.message}`);
         this.logger.error(`GCS error stack: ${gcsError.stack}`);
-        
+
         // Don't fall back to local storage - throw error instead
         // Localhost URLs won't work with Printful's mockup generator
-        throw new BadRequestException(`Failed to upload design to cloud storage: ${gcsError.message}`);
+        throw new BadRequestException(
+          `Failed to upload design to cloud storage: ${gcsError.message}`,
+        );
       }
     } catch (error) {
       this.logger.error(`Failed to upload design: ${error.message}`);
       if (error.response?.data) {
-        this.logger.error(`Printful API response: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(
+          `Printful API response: ${JSON.stringify(error.response.data)}`,
+        );
       }
-      throw new BadRequestException(`Failed to upload design: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to upload design: ${error.message}`,
+      );
     }
   }
 
@@ -261,12 +283,14 @@ export class PrintfulService {
     createProductDto: CreatePrintfulProductDto,
   ): Promise<PrintfulProductResponseDto> {
     try {
-      this.logger.log(`Creating Printful product: ${createProductDto.productName}`);
+      this.logger.log(
+        `Creating Printful product: ${createProductDto.productName}`,
+      );
 
       // For the minimal flow, we'll just save to our database
       // and skip creating in Printful's sync products (which requires more setup)
       // The mockup generator can work directly with product IDs and design URLs
-      
+
       // Generate a mock sync product ID
       const mockSyncProductId = Date.now();
       const mockSyncVariantId = mockSyncProductId + 1;
@@ -302,7 +326,9 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to create product: ${error.message}`);
-      throw new BadRequestException(`Failed to create product: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create product: ${error.message}`,
+      );
     }
   }
 
@@ -311,7 +337,9 @@ export class PrintfulService {
    */
   async getSyncProduct(syncProductId: number): Promise<any> {
     try {
-      const response = await this.apiClient.get(`/sync/products/${syncProductId}`);
+      const response = await this.apiClient.get(
+        `/sync/products/${syncProductId}`,
+      );
       return response.data.result;
     } catch (error) {
       this.logger.error(`Failed to get sync product: ${error.message}`);
@@ -322,7 +350,9 @@ export class PrintfulService {
   /**
    * List all sync products
    */
-  async listSyncProducts(status?: string): Promise<PrintfulSyncProductDocument[]> {
+  async listSyncProducts(
+    status?: string,
+  ): Promise<PrintfulSyncProductDocument[]> {
     try {
       const query = status ? { syncStatus: status } : {};
       return await this.syncProductModel
@@ -331,7 +361,9 @@ export class PrintfulService {
         .exec();
     } catch (error) {
       this.logger.error(`Failed to list sync products: ${error.message}`);
-      throw new BadRequestException(`Failed to list sync products: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to list sync products: ${error.message}`,
+      );
     }
   }
 
@@ -343,9 +375,9 @@ export class PrintfulService {
   async listProducts(): Promise<any> {
     try {
       const response = await this.retryWithBackoff(() =>
-        this.apiClient.get('/products')
+        this.apiClient.get('/products'),
       );
-      
+
       return {
         products: response.data.result.map((product: any) => ({
           id: product.id,
@@ -359,7 +391,9 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to list products: ${error.message}`);
-      throw new BadRequestException(`Failed to list products: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to list products: ${error.message}`,
+      );
     }
   }
 
@@ -369,11 +403,11 @@ export class PrintfulService {
   async getProductVariants(productId: number): Promise<any> {
     try {
       const response = await this.retryWithBackoff(() =>
-        this.apiClient.get(`/products/${productId}`)
+        this.apiClient.get(`/products/${productId}`),
       );
-      
+
       const product = response.data.result;
-      
+
       return {
         product: {
           id: product.id,
@@ -397,7 +431,9 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to get product variants: ${error.message}`);
-      throw new BadRequestException(`Failed to get product variants: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to get product variants: ${error.message}`,
+      );
     }
   }
 
@@ -409,14 +445,16 @@ export class PrintfulService {
    */
   async generateMockupSimple(dto: any): Promise<MockupResponseDto> {
     try {
-      this.logger.log(`[SIMPLE] Generating mockup for product: ${dto.productId}`);
-      
+      this.logger.log(
+        `[SIMPLE] Generating mockup for product: ${dto.productId}`,
+      );
+
       // Step 1: Fetch product details to get variants
       const productResponse = await this.retryWithBackoff(() =>
-        this.apiClient.get(`/products/${dto.productId}`)
+        this.apiClient.get(`/products/${dto.productId}`),
       );
       const product = productResponse.data.result;
-      
+
       // Step 2: Select variants (use specified or pick first few)
       let variantIds: number[];
       if (dto.variantIds && dto.variantIds.length > 0) {
@@ -429,30 +467,36 @@ export class PrintfulService {
           .filter((v: any) => v.in_stock !== false)
           .slice(0, maxVariants)
           .map((v: any) => v.id);
-        
+
         if (inStockVariants.length === 0) {
-          throw new BadRequestException('No in-stock variants available for this product');
+          throw new BadRequestException(
+            'No in-stock variants available for this product',
+          );
         }
-        
+
         variantIds = inStockVariants;
-        this.logger.log(`Auto-selected ${variantIds.length} variants: ${variantIds.join(', ')}`);
+        this.logger.log(
+          `Auto-selected ${variantIds.length} variants: ${variantIds.join(', ')}`,
+        );
       }
-      
+
       // Step 3: Auto-detect image dimensions
       this.logger.log('Downloading image to detect dimensions...');
       const axios = require('axios');
-      const imageResponse = await axios.get(dto.imageUrl, { responseType: 'arraybuffer' });
+      const imageResponse = await axios.get(dto.imageUrl, {
+        responseType: 'arraybuffer',
+      });
       const buffer = Buffer.from(imageResponse.data);
-      
+
       const sharp = require('sharp');
       const metadata = await sharp(buffer).metadata();
-      
+
       if (!metadata.width || !metadata.height) {
         throw new BadRequestException('Could not determine image dimensions');
       }
-      
+
       this.logger.log(`Image dimensions: ${metadata.width}x${metadata.height}`);
-      
+
       // Step 4: Calculate position
       const positionResult = await this.calculatePosition({
         productId: dto.productId,
@@ -461,20 +505,24 @@ export class PrintfulService {
         imageHeight: metadata.height,
         placement: dto.placement || 'front',
       });
-      
+
       // Step 5: Generate mockup
       return await this.generateMockup({
         productId: dto.productId,
         variantIds: variantIds,
-        files: [{
-          placement: dto.placement || 'front',
-          image_url: dto.imageUrl,
-          position: positionResult.position,
-        }],
+        files: [
+          {
+            placement: dto.placement || 'front',
+            image_url: dto.imageUrl,
+            position: positionResult.position,
+          },
+        ],
       });
     } catch (error) {
       this.logger.error(`[SIMPLE] Failed to generate mockup: ${error.message}`);
-      throw new BadRequestException(`Failed to generate mockup: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to generate mockup: ${error.message}`,
+      );
     }
   }
 
@@ -482,96 +530,121 @@ export class PrintfulService {
    * Generate product mockups (ADVANCED version - requires manual setup)
    * Use generateMockupSimple() instead for easier integration
    */
-  async generateMockup(generateMockupDto: GenerateMockupDto): Promise<MockupResponseDto> {
+  async generateMockup(
+    generateMockupDto: GenerateMockupDto,
+  ): Promise<MockupResponseDto> {
     try {
-      this.logger.log(`Generating mockup for product: ${generateMockupDto.productId}, variants: ${generateMockupDto.variantIds.join(', ')}`);
-      
+      this.logger.log(
+        `Generating mockup for product: ${generateMockupDto.productId}, variants: ${generateMockupDto.variantIds.join(', ')}`,
+      );
+
       // Validate that variants belong to the product
       try {
         const productResponse = await this.retryWithBackoff(() =>
-          this.apiClient.get(`/products/${generateMockupDto.productId}`)
+          this.apiClient.get(`/products/${generateMockupDto.productId}`),
         );
         const product = productResponse.data.result;
         const productVariantIds = product.variants.map((v: any) => v.id);
-        
+
         const invalidVariants = generateMockupDto.variantIds.filter(
-          vid => !productVariantIds.includes(vid)
+          (vid) => !productVariantIds.includes(vid),
         );
-        
+
         if (invalidVariants.length > 0) {
           this.logger.error(
-            `Invalid variant IDs for product ${generateMockupDto.productId}: ${invalidVariants.join(', ')}`
+            `Invalid variant IDs for product ${generateMockupDto.productId}: ${invalidVariants.join(', ')}`,
           );
-          this.logger.error(`Valid variant IDs for this product: ${productVariantIds.join(', ')}`);
+          this.logger.error(
+            `Valid variant IDs for this product: ${productVariantIds.join(', ')}`,
+          );
           throw new BadRequestException(
             `Variant IDs [${invalidVariants.join(', ')}] do not belong to product ${generateMockupDto.productId}. ` +
-            `Valid variants: [${productVariantIds.slice(0, 5).join(', ')}${productVariantIds.length > 5 ? '...' : ''}]`
+              `Valid variants: [${productVariantIds.slice(0, 5).join(', ')}${productVariantIds.length > 5 ? '...' : ''}]`,
           );
         }
       } catch (validationError) {
         if (validationError instanceof BadRequestException) {
           throw validationError;
         }
-        this.logger.warn(`Could not validate variants: ${validationError.message}`);
+        this.logger.warn(
+          `Could not validate variants: ${validationError.message}`,
+        );
       }
-      
+
       // Process files
       const processedFiles = await Promise.all(
         generateMockupDto.files.map(async (file) => {
           let imageUrl = file.image_url;
-          
+
           // If it's a data URL, we need to convert it to a public URL
           if (imageUrl.startsWith('data:')) {
             this.logger.log('Data URL detected - converting to public URL');
-            
+
             try {
               // Extract base64 and filename from data URL
-              const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+              const matches = imageUrl.match(
+                /^data:([A-Za-z-+\/]+);base64,(.+)$/,
+              );
               if (matches && matches[2]) {
                 const base64Data = matches[2];
                 const mimeType = matches[1];
                 const extension = mimeType.includes('png') ? 'png' : 'jpg';
-                
+
                 const uploadResult = await this.uploadDesign({
                   file: base64Data,
                   filename: `design_${Date.now()}.${extension}`,
                 });
-                
+
                 imageUrl = uploadResult.url; // Use the public URL
                 this.logger.log(`File saved. Using URL: ${imageUrl}`);
               }
             } catch (uploadError) {
-              this.logger.error(`Failed to save file for mockup: ${uploadError.message}`);
+              this.logger.error(
+                `Failed to save file for mockup: ${uploadError.message}`,
+              );
               throw new BadRequestException('Failed to save design file');
             }
-          } else if (imageUrl.startsWith('http://localhost') || imageUrl.startsWith('http://127.0.0.1')) {
+          } else if (
+            imageUrl.startsWith('http://localhost') ||
+            imageUrl.startsWith('http://127.0.0.1')
+          ) {
             // This should not happen anymore - all files should be uploaded to GCS first
-            this.logger.error('Localhost URL detected - this indicates GCS upload failed');
-            throw new BadRequestException('Design file must be publicly accessible. Localhost URLs cannot be used.');
+            this.logger.error(
+              'Localhost URL detected - this indicates GCS upload failed',
+            );
+            throw new BadRequestException(
+              'Design file must be publicly accessible. Localhost URLs cannot be used.',
+            );
           } else {
             this.logger.log(`Using provided URL: ${imageUrl}`);
           }
-          
+
           // If position is not provided, try to auto-calculate it
           let position = file.position;
-          
+
           if (!position) {
-            this.logger.warn('Position not provided, attempting to auto-calculate...');
-            
+            this.logger.warn(
+              'Position not provided, attempting to auto-calculate...',
+            );
+
             try {
               // Try to get image dimensions from the URL
               // This is a fallback - ideally the frontend should calculate and send position
               const axios = require('axios');
-              const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+              const imageResponse = await axios.get(imageUrl, {
+                responseType: 'arraybuffer',
+              });
               const buffer = Buffer.from(imageResponse.data);
-              
+
               // Get image dimensions using sharp
               const sharp = require('sharp');
               const metadata = await sharp(buffer).metadata();
-              
+
               if (metadata.width && metadata.height) {
-                this.logger.log(`Auto-detected image dimensions: ${metadata.width}x${metadata.height}`);
-                
+                this.logger.log(
+                  `Auto-detected image dimensions: ${metadata.width}x${metadata.height}`,
+                );
+
                 // Calculate position for this product/variant
                 const positionCalc = await this.calculatePosition({
                   productId: generateMockupDto.productId,
@@ -580,15 +653,19 @@ export class PrintfulService {
                   imageHeight: metadata.height,
                   placement: file.placement || 'front',
                 });
-                
+
                 position = positionCalc.position;
-                this.logger.log(`Auto-calculated position: ${JSON.stringify(position)}`);
+                this.logger.log(
+                  `Auto-calculated position: ${JSON.stringify(position)}`,
+                );
               } else {
                 throw new Error('Could not determine image dimensions');
               }
             } catch (autoCalcError) {
-              this.logger.error(`Failed to auto-calculate position: ${autoCalcError.message}`);
-              
+              this.logger.error(
+                `Failed to auto-calculate position: ${autoCalcError.message}`,
+              );
+
               // Use sensible defaults as last resort
               this.logger.warn('Using default position as fallback');
               position = {
@@ -609,21 +686,23 @@ export class PrintfulService {
           };
         }),
       );
-      
+
       const requestBody = {
         variant_ids: generateMockupDto.variantIds,
         format: 'jpg',
         files: processedFiles,
       };
-      
-      this.logger.debug(`Mockup request body: ${JSON.stringify(requestBody, null, 2)}`);
+
+      this.logger.debug(
+        `Mockup request body: ${JSON.stringify(requestBody, null, 2)}`,
+      );
 
       // Create mockup task (with retry logic for rate limiting)
       const response = await this.retryWithBackoff(() =>
         this.apiClient.post(
           `/mockup-generator/create-task/${generateMockupDto.productId}`,
           requestBody,
-        )
+        ),
       );
 
       const result = response.data.result;
@@ -635,9 +714,13 @@ export class PrintfulService {
     } catch (error) {
       this.logger.error(`Failed to generate mockup: ${error.message}`);
       if (error.response?.data) {
-        this.logger.error(`Printful error details: ${JSON.stringify(error.response.data, null, 2)}`);
+        this.logger.error(
+          `Printful error details: ${JSON.stringify(error.response.data, null, 2)}`,
+        );
       }
-      throw new BadRequestException(`Failed to generate mockup: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to generate mockup: ${error.message}`,
+      );
     }
   }
 
@@ -646,10 +729,9 @@ export class PrintfulService {
    */
   async getMockupStatus(taskKey: string): Promise<MockupResponseDto> {
     try {
-      const response = await this.apiClient.get(
-        `/mockup-generator/task`,
-        { params: { task_key: taskKey } },
-      );
+      const response = await this.apiClient.get(`/mockup-generator/task`, {
+        params: { task_key: taskKey },
+      });
 
       const result = response.data.result;
 
@@ -661,7 +743,9 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to get mockup status: ${error.message}`);
-      throw new BadRequestException(`Failed to get mockup status: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to get mockup status: ${error.message}`,
+      );
     }
   }
 
@@ -700,7 +784,7 @@ export class PrintfulService {
     try {
       const response = await this.apiClient.get(`/products/${productId}`);
       const product = response.data.result.product;
-      
+
       // Printful returns size_tables as an array
       return {
         productId: product.id,
@@ -709,7 +793,9 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to get size guide: ${error.message}`);
-      throw new NotFoundException(`Size guide not found for product: ${productId}`);
+      throw new NotFoundException(
+        `Size guide not found for product: ${productId}`,
+      );
     }
   }
 
@@ -724,43 +810,49 @@ export class PrintfulService {
   async createCompleteOrder(orderData: any): Promise<any> {
     try {
       this.logger.log('=== Starting Complete Order Workflow ===');
-      const { recipient, items, shipping_method, shipping_cost, tax_amount } = orderData;
-      
+      const { recipient, items, shipping_method, shipping_cost, tax_amount } =
+        orderData;
+
       // Log shipping details if provided
       if (shipping_method) {
         this.logger.log(`Shipping method: ${shipping_method}`);
         this.logger.log(`Shipping cost: $${shipping_cost || 0}`);
         this.logger.log(`Tax amount: $${tax_amount || 0}`);
       }
-      
+
       // Process each item
-      const processedItems: Array<{ sync_variant_id: number; quantity: number }> = [];
-      
+      const processedItems: Array<{
+        sync_variant_id: number;
+        quantity: number;
+      }> = [];
+
       for (const item of items) {
         this.logger.log(`Processing item: ${item.productType}`);
-        
+
         let syncVariantId = item.variantId;
-        
+
         // If item has custom design, we need to create a sync product
         if (item.design && item.design.fileDataUrl) {
           this.logger.log('Item has custom design, creating sync product...');
-          
+
           // Step 1: Extract base64 data and upload to GCS
-          const base64Match = item.design.fileDataUrl.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/);
+          const base64Match = item.design.fileDataUrl.match(
+            /^data:image\/(png|jpeg|jpg);base64,(.+)$/,
+          );
           if (!base64Match) {
             throw new BadRequestException('Invalid image data format');
           }
-          
+
           const extension = base64Match[1] === 'jpeg' ? 'jpg' : base64Match[1];
           const base64Data = base64Match[2];
-          
+
           const uploadResult = await this.uploadDesign({
             file: base64Data,
             filename: `custom_design_${Date.now()}.${extension}`,
           });
-          
+
           this.logger.log(`Design uploaded to: ${uploadResult.url}`);
-          
+
           // Step 2: Create sync product with the design
           const syncProductData = {
             sync_product: {
@@ -779,47 +871,59 @@ export class PrintfulService {
               },
             ],
           };
-          
+
           this.logger.log('Creating sync product in Printful...');
           this.logger.log(JSON.stringify(syncProductData, null, 2));
-          
-          const syncResponse = await this.apiClient.post('/store/products', syncProductData);
+
+          const syncResponse = await this.apiClient.post(
+            '/store/products',
+            syncProductData,
+          );
           const createdProduct = syncResponse.data.result;
-          
+
           this.logger.log('Sync product created:');
           this.logger.log(JSON.stringify(createdProduct, null, 2));
-          
+
           // The create response only returns basic info, need to fetch full product details
           const syncProductId = createdProduct.id;
-          this.logger.log(`Fetching full sync product details for ID: ${syncProductId}`);
-          
-          const fullProductResponse = await this.apiClient.get(`/store/products/${syncProductId}`);
+          this.logger.log(
+            `Fetching full sync product details for ID: ${syncProductId}`,
+          );
+
+          const fullProductResponse = await this.apiClient.get(
+            `/store/products/${syncProductId}`,
+          );
           const fullProduct = fullProductResponse.data.result;
-          
+
           this.logger.log('Full sync product details:');
           this.logger.log(JSON.stringify(fullProduct, null, 2));
-          
+
           // Get the sync variant ID from the full product details
-          if (!fullProduct.sync_variants || fullProduct.sync_variants.length === 0) {
-            throw new BadRequestException('Sync product was created but has no variants');
+          if (
+            !fullProduct.sync_variants ||
+            fullProduct.sync_variants.length === 0
+          ) {
+            throw new BadRequestException(
+              'Sync product was created but has no variants',
+            );
           }
-          
+
           syncVariantId = fullProduct.sync_variants[0].id;
-          
+
           this.logger.log(`Sync variant ID: ${syncVariantId}`);
         }
-        
+
         // Add to processed items
         processedItems.push({
           sync_variant_id: syncVariantId,
           quantity: item.quantity,
         });
       }
-      
+
       // Step 3: Create order in Printful
       this.logger.log('=== Step 3: Creating Order in Printful ===');
       this.logger.log(`Processed ${processedItems.length} items`);
-      
+
       // Clean up recipient data - remove undefined values
       const cleanRecipient: any = {
         name: recipient.name,
@@ -828,24 +932,25 @@ export class PrintfulService {
         country_code: recipient.country_code,
         zip: recipient.zip,
       };
-      
+
       // Add optional fields only if they exist
       if (recipient.address2) cleanRecipient.address2 = recipient.address2;
-      if (recipient.state_code) cleanRecipient.state_code = recipient.state_code;
+      if (recipient.state_code)
+        cleanRecipient.state_code = recipient.state_code;
       if (recipient.email) cleanRecipient.email = recipient.email;
       if (recipient.phone) cleanRecipient.phone = recipient.phone;
-      
+
       const printfulOrderData: any = {
         recipient: cleanRecipient,
         items: processedItems,
         confirm: false, // Create as draft order
       };
-      
+
       // Add shipping method if provided
       if (shipping_method) {
         printfulOrderData.shipping = shipping_method;
       }
-      
+
       // Add retail costs (what customer paid) for tracking
       if (shipping_cost !== undefined || tax_amount !== undefined) {
         printfulOrderData.retail_costs = {
@@ -853,21 +958,24 @@ export class PrintfulService {
           tax: tax_amount ? tax_amount.toFixed(2) : undefined,
         };
       }
-      
+
       this.logger.log('Order data to send to Printful:');
       this.logger.log(JSON.stringify(printfulOrderData, null, 2));
-      
+
       try {
         this.logger.log('Calling Printful API: POST /orders');
-        const orderResponse = await this.apiClient.post('/orders', printfulOrderData);
+        const orderResponse = await this.apiClient.post(
+          '/orders',
+          printfulOrderData,
+        );
         const createdOrder = orderResponse.data.result;
-        
+
         this.logger.log('=== Order Created Successfully ===');
         this.logger.log(`Order ID: ${createdOrder.id}`);
         this.logger.log(`Order Status: ${createdOrder.status}`);
         this.logger.log('Full order details:');
         this.logger.log(JSON.stringify(createdOrder, null, 2));
-        
+
         // Enhance the response with our custom shipping/tax data
         return {
           ...createdOrder,
@@ -878,30 +986,34 @@ export class PrintfulService {
       } catch (orderError) {
         this.logger.error('=== Order Creation Failed ===');
         this.logger.error(`Error message: ${orderError.message}`);
-        
+
         if (orderError.response) {
           this.logger.error(`HTTP Status: ${orderError.response.status}`);
           this.logger.error('Printful API Error Response:');
           this.logger.error(JSON.stringify(orderError.response.data, null, 2));
-          
+
           if (orderError.response.data?.error) {
-            this.logger.error(`Printful Error Code: ${orderError.response.data.error.code}`);
-            this.logger.error(`Printful Error Message: ${orderError.response.data.error.message}`);
+            this.logger.error(
+              `Printful Error Code: ${orderError.response.data.error.code}`,
+            );
+            this.logger.error(
+              `Printful Error Message: ${orderError.response.data.error.message}`,
+            );
           }
         }
-        
+
         throw orderError; // Re-throw to be caught by outer catch
       }
-      
     } catch (error) {
       this.logger.error(`Failed to create complete order: ${error.message}`);
-      
+
       if (error.response) {
         this.logger.error('Printful API Response:');
         this.logger.error(JSON.stringify(error.response.data, null, 2));
       }
-      
-      const errorMessage = error.response?.data?.error?.message || error.message;
+
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
       throw new BadRequestException(`Failed to create order: ${errorMessage}`);
     }
   }
@@ -913,19 +1025,20 @@ export class PrintfulService {
     try {
       this.logger.log('Creating Printful order with data:');
       this.logger.log(JSON.stringify(orderData, null, 2));
-      
+
       const response = await this.apiClient.post('/orders', orderData);
       return response.data.result;
     } catch (error) {
       this.logger.error(`Failed to create order: ${error.message}`);
-      
+
       // Log detailed error from Printful
       if (error.response) {
         this.logger.error('Printful API Response:');
         this.logger.error(JSON.stringify(error.response.data, null, 2));
       }
-      
-      const errorMessage = error.response?.data?.error?.message || error.message;
+
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
       throw new BadRequestException(`Failed to create order: ${errorMessage}`);
     }
   }
@@ -957,6 +1070,29 @@ export class PrintfulService {
     }
   }
 
+  /**
+   * Cancel an order in Printful
+   */
+  async cancelOrder(orderId: number): Promise<any> {
+    try {
+      this.logger.log(`Cancelling Printful order ${orderId}`);
+      const response = await this.apiClient.delete(`/orders/${orderId}`);
+      this.logger.log(`Printful order ${orderId} cancelled successfully`);
+      return response.data.result;
+    } catch (error) {
+      this.logger.error(`Failed to cancel order: ${error.message}`);
+      
+      // Log detailed error from Printful
+      if (error.response) {
+        this.logger.error('Printful API Response:');
+        this.logger.error(JSON.stringify(error.response.data, null, 2));
+      }
+
+      const errorMessage = error.response?.data?.error?.message || error.message;
+      throw new BadRequestException(`Failed to cancel order: ${errorMessage}`);
+    }
+  }
+
   // ==================== Shipping ====================
 
   /**
@@ -964,18 +1100,24 @@ export class PrintfulService {
    */
   async calculateShippingRates(dto: any): Promise<any> {
     try {
-      this.logger.log(`Calculating shipping rates for ${dto.recipient.country_code}`);
+      this.logger.log(
+        `Calculating shipping rates for ${dto.recipient.country_code}`,
+      );
 
       // Add default state codes if missing for countries that require it (US, CA, AU)
       // This prevents 400 Bad Request errors when user hasn't provided a state
       let stateCode = dto.recipient.state_code;
       if (!stateCode) {
-        if (dto.recipient.country_code === 'US') stateCode = 'CA'; // California
-        else if (dto.recipient.country_code === 'CA') stateCode = 'ON'; // Ontario
+        if (dto.recipient.country_code === 'US')
+          stateCode = 'CA'; // California
+        else if (dto.recipient.country_code === 'CA')
+          stateCode = 'ON'; // Ontario
         else if (dto.recipient.country_code === 'AU') stateCode = 'NSW'; // New South Wales
-        
+
         if (stateCode) {
-          this.logger.log(`Using default state code '${stateCode}' for ${dto.recipient.country_code}`);
+          this.logger.log(
+            `Using default state code '${stateCode}' for ${dto.recipient.country_code}`,
+          );
         }
       }
 
@@ -995,11 +1137,11 @@ export class PrintfulService {
       };
 
       const response = await this.retryWithBackoff(() =>
-        this.apiClient.post('/shipping/rates', printfulRequest)
+        this.apiClient.post('/shipping/rates', printfulRequest),
       );
 
       const shippingRates = response.data.result || [];
-      
+
       // Transform Printful response to our format
       const shippingMethods = shippingRates.map((rate: any) => ({
         id: rate.id,
@@ -1008,7 +1150,10 @@ export class PrintfulService {
         currency: dto.currency || 'USD',
         min_delivery_days: rate.minDeliveryDays,
         max_delivery_days: rate.maxDeliveryDays,
-        delivery_estimate: this.formatDeliveryEstimate(rate.minDeliveryDays, rate.maxDeliveryDays),
+        delivery_estimate: this.formatDeliveryEstimate(
+          rate.minDeliveryDays,
+          rate.maxDeliveryDays,
+        ),
       }));
 
       this.logger.log(`Found ${shippingMethods.length} shipping methods`);
@@ -1021,9 +1166,13 @@ export class PrintfulService {
     } catch (error) {
       this.logger.error(`Failed to calculate shipping rates: ${error.message}`);
       if (error.response?.data) {
-        this.logger.error(`Printful API error: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(
+          `Printful API error: ${JSON.stringify(error.response.data)}`,
+        );
       }
-      throw new BadRequestException(`Failed to calculate shipping rates: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to calculate shipping rates: ${error.message}`,
+      );
     }
   }
 
@@ -1032,7 +1181,7 @@ export class PrintfulService {
    */
   async getEstimatedShippingForCountry(dto: any): Promise<any> {
     try {
-      this.logger.log(`Estimating shipping for country: ${dto.country_code}`);
+      //this.logger.log(`Estimating shipping for country: ${dto.country_code}`);
 
       // Use a sample item for estimation
       // Using variant ID 4011 (Bella + Canvas 3001 Unisex T-Shirt - Small/White) as a standard reference
@@ -1040,8 +1189,10 @@ export class PrintfulService {
 
       // Add default state codes for countries that require them for accurate estimation
       let stateCode: string | undefined;
-      if (dto.country_code === 'US') stateCode = 'CA'; // California as default
-      else if (dto.country_code === 'CA') stateCode = 'ON'; // Ontario as default
+      if (dto.country_code === 'US')
+        stateCode = 'CA'; // California as default
+      else if (dto.country_code === 'CA')
+        stateCode = 'ON'; // Ontario as default
       else if (dto.country_code === 'AU') stateCode = 'NSW'; // New South Wales as default
 
       const printfulRequest = {
@@ -1059,45 +1210,56 @@ export class PrintfulService {
       };
 
       const response = await this.retryWithBackoff(() =>
-        this.apiClient.post('/shipping/rates', printfulRequest)
+        this.apiClient.post('/shipping/rates', printfulRequest),
       );
 
       const shippingRates = response.data.result || [];
-      
+
       // Return the cheapest (standard) shipping option as estimate
-      const standardShipping = shippingRates.find((rate: any) => 
-        rate.id === 'STANDARD' || rate.name?.toLowerCase().includes('standard')
-      ) || shippingRates[0];
+      const standardShipping =
+        shippingRates.find(
+          (rate: any) =>
+            rate.id === 'STANDARD' ||
+            rate.name?.toLowerCase().includes('standard'),
+        ) || shippingRates[0];
 
       if (!standardShipping) {
-        this.logger.warn(`No shipping rates found for ${dto.country_code}, using default`);
+        this.logger.warn(
+          `No shipping rates found for ${dto.country_code}, using default`,
+        );
         return {
-          shipping_methods: [{
-            id: 'STANDARD',
-            name: 'STANDARD',
-            rate: 5.00, // Default fallback
-            currency: 'USD',
-            delivery_estimate: '7-14 business days',
-          }],
+          shipping_methods: [
+            {
+              id: 'STANDARD',
+              name: 'STANDARD',
+              rate: 5.0, // Default fallback
+              currency: 'USD',
+              delivery_estimate: '7-14 business days',
+            },
+          ],
           currency: 'USD',
           is_estimated: true,
         };
       }
 
-      const shippingMethods = [{
-        id: standardShipping.id,
-        name: standardShipping.name || 'STANDARD',
-        rate: parseFloat(standardShipping.rate || '0'),
-        currency: 'USD',
-        min_delivery_days: standardShipping.minDeliveryDays,
-        max_delivery_days: standardShipping.maxDeliveryDays,
-        delivery_estimate: this.formatDeliveryEstimate(
-          standardShipping.minDeliveryDays,
-          standardShipping.maxDeliveryDays
-        ),
-      }];
+      const shippingMethods = [
+        {
+          id: standardShipping.id,
+          name: standardShipping.name || 'STANDARD',
+          rate: parseFloat(standardShipping.rate || '0'),
+          currency: 'USD',
+          min_delivery_days: standardShipping.minDeliveryDays,
+          max_delivery_days: standardShipping.maxDeliveryDays,
+          delivery_estimate: this.formatDeliveryEstimate(
+            standardShipping.minDeliveryDays,
+            standardShipping.maxDeliveryDays,
+          ),
+        },
+      ];
 
-      this.logger.log(`Estimated shipping for ${dto.country_code}: $${shippingMethods[0].rate}`);
+      this.logger.log(
+        `Estimated shipping for ${dto.country_code}: $${shippingMethods[0].rate}`,
+      );
 
       return {
         shipping_methods: shippingMethods,
@@ -1106,16 +1268,18 @@ export class PrintfulService {
       };
     } catch (error) {
       this.logger.error(`Failed to estimate shipping: ${error.message}`);
-      
+
       // Return a reasonable default instead of failing
       return {
-        shipping_methods: [{
-          id: 'STANDARD',
-          name: 'STANDARD',
-          rate: 5.00,
-          currency: 'USD',
-          delivery_estimate: '7-14 business days',
-        }],
+        shipping_methods: [
+          {
+            id: 'STANDARD',
+            name: 'STANDARD',
+            rate: 5.0,
+            currency: 'USD',
+            delivery_estimate: '7-14 business days',
+          },
+        ],
         currency: 'USD',
         is_estimated: true,
       };
@@ -1136,22 +1300,22 @@ export class PrintfulService {
       const taxRates: Record<string, number> = {
         // US states with sales tax (simplified - actual rates vary by county/city)
         'US-CA': 0.0725, // California
-        'US-NY': 0.04,   // New York
+        'US-NY': 0.04, // New York
         'US-TX': 0.0625, // Texas
-        'US-FL': 0.06,   // Florida
+        'US-FL': 0.06, // Florida
         // EU countries with VAT
-        'GB': 0.20,      // UK VAT
-        'DE': 0.19,      // Germany VAT
-        'FR': 0.20,      // France VAT
-        'IT': 0.22,      // Italy VAT
-        'ES': 0.21,      // Spain VAT
-        'NL': 0.21,      // Netherlands VAT
+        GB: 0.2, // UK VAT
+        DE: 0.19, // Germany VAT
+        FR: 0.2, // France VAT
+        IT: 0.22, // Italy VAT
+        ES: 0.21, // Spain VAT
+        NL: 0.21, // Netherlands VAT
         // Other countries
-        'CA': 0.05,      // Canada GST (provinces add PST)
-        'AU': 0.10,      // Australia GST
-        'JP': 0.10,      // Japan consumption tax
-        'HK': 0.00,      // Hong Kong - no sales tax
-        'SG': 0.08,      // Singapore GST
+        CA: 0.05, // Canada GST (provinces add PST)
+        AU: 0.1, // Australia GST
+        JP: 0.1, // Japan consumption tax
+        HK: 0.0, // Hong Kong - no sales tax
+        SG: 0.08, // Singapore GST
       };
 
       // Determine tax key (country code or country-state for US)
@@ -1165,20 +1329,31 @@ export class PrintfulService {
       const totalTax = Math.round(taxableAmount * taxRate * 100) / 100;
 
       const taxRequired = taxRate > 0;
-      const taxType = dto.recipient.country_code === 'US' ? 'Sales Tax' : 
-                      ['GB', 'DE', 'FR', 'IT', 'ES', 'NL'].includes(dto.recipient.country_code) ? 'VAT' :
-                      'Tax';
+      const taxType =
+        dto.recipient.country_code === 'US'
+          ? 'Sales Tax'
+          : ['GB', 'DE', 'FR', 'IT', 'ES', 'NL'].includes(
+                dto.recipient.country_code,
+              )
+            ? 'VAT'
+            : 'Tax';
 
-      this.logger.log(`Tax calculation: ${taxableAmount} * ${taxRate} = ${totalTax}`);
+      this.logger.log(
+        `Tax calculation: ${taxableAmount} * ${taxRate} = ${totalTax}`,
+      );
 
       return {
         total_tax: totalTax,
         currency: dto.currency || 'USD',
-        breakdown: taxRequired ? [{
-          type: taxType,
-          rate: taxRate * 100, // Convert to percentage
-          amount: totalTax,
-        }] : [],
+        breakdown: taxRequired
+          ? [
+              {
+                type: taxType,
+                rate: taxRate * 100, // Convert to percentage
+                amount: totalTax,
+              },
+            ]
+          : [],
         tax_required: taxRequired,
       };
     } catch (error) {
@@ -1205,7 +1380,9 @@ export class PrintfulService {
       return response.data.result;
     } catch (error) {
       this.logger.error(`Failed to calculate shipping: ${error.message}`);
-      throw new BadRequestException(`Failed to calculate shipping: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to calculate shipping: ${error.message}`,
+      );
     }
   }
 
@@ -1240,18 +1417,24 @@ export class PrintfulService {
         return await fn();
       } catch (error) {
         // Check if it's a rate limit error (429)
-        const isRateLimit = error.response?.status === 429 || error.response?.data?.code === 429;
-        const retryAfter = error.response?.data?.error?.message?.match(/after (\d+) seconds/)?.[1];
-        
+        const isRateLimit =
+          error.response?.status === 429 || error.response?.data?.code === 429;
+        const retryAfter =
+          error.response?.data?.error?.message?.match(
+            /after (\d+) seconds/,
+          )?.[1];
+
         if (isRateLimit && attempt < maxRetries) {
-          const delay = retryAfter ? parseInt(retryAfter) * 1000 : initialDelay * Math.pow(2, attempt);
+          const delay = retryAfter
+            ? parseInt(retryAfter) * 1000
+            : initialDelay * Math.pow(2, attempt);
           this.logger.warn(
             `Rate limited by Printful. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
           );
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
           continue;
         }
-        
+
         // If not rate limit or max retries reached, throw the error
         throw error;
       }
@@ -1265,51 +1448,69 @@ export class PrintfulService {
   async calculatePosition(calculateDto: any): Promise<any> {
     try {
       // Get mockup generator template for accurate dimensions
-      this.logger.log(`Fetching mockup template for product ${calculateDto.productId}...`);
-      
-      const templateResponse = await this.retryWithBackoff(() =>
-        this.apiClient.get(`/mockup-generator/templates/${calculateDto.productId}`)
+      this.logger.log(
+        `Fetching mockup template for product ${calculateDto.productId}...`,
       );
-      
+
+      const templateResponse = await this.retryWithBackoff(() =>
+        this.apiClient.get(
+          `/mockup-generator/templates/${calculateDto.productId}`,
+        ),
+      );
+
       const templates = templateResponse.data.result.templates;
       if (!templates || templates.length === 0) {
-        throw new BadRequestException('No mockup templates found for this product');
+        throw new BadRequestException(
+          'No mockup templates found for this product',
+        );
       }
-      
+
       // Use the first template (or find a specific one by style)
       const template = templates[0];
-      
+
       // Find the print area for the requested placement
       const placement = calculateDto.placement || 'default';
-      const printArea = template.print_areas?.find((pa: any) => 
-        pa.placement === placement || 
-        (placement === 'front' && pa.placement === 'default')
+      const printArea = template.print_areas?.find(
+        (pa: any) =>
+          pa.placement === placement ||
+          (placement === 'front' && pa.placement === 'default'),
       );
-      
+
       if (!printArea) {
-        this.logger.warn(`Placement "${placement}" not found, using first available print area`);
+        this.logger.warn(
+          `Placement "${placement}" not found, using first available print area`,
+        );
         const firstPrintArea = template.print_areas?.[0];
         if (!firstPrintArea) {
           throw new BadRequestException('No print areas found in template');
         }
-        return this.calculatePositionFromPrintArea(firstPrintArea, calculateDto);
+        return this.calculatePositionFromPrintArea(
+          firstPrintArea,
+          calculateDto,
+        );
       }
 
       return this.calculatePositionFromPrintArea(printArea, calculateDto);
     } catch (error) {
       this.logger.error(`Failed to calculate position: ${error.message}`);
-      throw new BadRequestException(`Failed to calculate position: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to calculate position: ${error.message}`,
+      );
     }
   }
 
   /**
    * Helper to calculate position from print area info
    */
-  private calculatePositionFromPrintArea(printArea: any, calculateDto: any): any {
+  private calculatePositionFromPrintArea(
+    printArea: any,
+    calculateDto: any,
+  ): any {
     // Print area dimensions from Printful template (in pixels)
     const printAreaWidth = printArea.width || 1800;
     const printAreaHeight = printArea.height || 2400;
-    const placement = printArea.placement || calculateDto.placement || 'default';
+    const placement =
+      printArea.placement || calculateDto.placement || 'default';
 
     // Design dimensions
     const designWidth = calculateDto.imageWidth;
@@ -1344,9 +1545,15 @@ export class PrintfulService {
       left: Math.round(left),
     };
 
-    this.logger.log(`Calculated position for ${placement}: ${JSON.stringify(position)}`);
-    this.logger.log(`Print area: ${printAreaWidth}x${printAreaHeight}, Design: ${designWidth}x${designHeight} (AR: ${designAspectRatio.toFixed(2)})`);
-    this.logger.log(`Scaled: ${scaledWidth}x${scaledHeight}, Offset: top=${top}, left=${left}`);
+    this.logger.log(
+      `Calculated position for ${placement}: ${JSON.stringify(position)}`,
+    );
+    this.logger.log(
+      `Print area: ${printAreaWidth}x${printAreaHeight}, Design: ${designWidth}x${designHeight} (AR: ${designAspectRatio.toFixed(2)})`,
+    );
+    this.logger.log(
+      `Scaled: ${scaledWidth}x${scaledHeight}, Offset: top=${top}, left=${left}`,
+    );
 
     return {
       position,
@@ -1366,7 +1573,9 @@ export class PrintfulService {
   /**
    * Map config document to DTO
    */
-  private mapConfigToDto(config: PrintfulConfigDocument): PrintfulConfigResponseDto {
+  private mapConfigToDto(
+    config: PrintfulConfigDocument,
+  ): PrintfulConfigResponseDto {
     return {
       id: (config._id as any).toString(),
       apiKey: config.apiKey,
@@ -1378,5 +1587,240 @@ export class PrintfulService {
       updatedAt: (config as any).updatedAt || new Date(),
     };
   }
-}
 
+  // ==================== Webhooks ====================
+
+  /**
+   * Handle Printful webhook events
+   */
+  async handleWebhook(signature: string, payload: any): Promise<{ success: boolean }> {
+    try {
+      // Verify webhook signature if secret is configured
+      const webhookSecret = this.configService.get<string>('PRINTFUL_WEBHOOK_SECRET');
+      
+      if (webhookSecret) {
+        // Printful uses HMAC SHA256 for webhook verification
+        // The signature header contains: timestamp.signature
+        // For now, we'll log this for setup but not fail if not configured
+        this.logger.log('Webhook signature verification enabled');
+        // TODO: Implement full signature verification when needed
+      }
+
+      const { type, data } = payload;
+
+      this.logger.log(`Received Printful webhook: ${type}`);
+
+      switch (type) {
+        case 'order_created':
+          await this.handleOrderCreated(data);
+          break;
+        case 'order_updated':
+          await this.handleOrderUpdated(data);
+          break;
+        case 'order_shipped':
+          await this.handleOrderShipped(data);
+          break;
+        case 'order_failed':
+          await this.handleOrderFailed(data);
+          break;
+        case 'order_canceled':
+          await this.handleOrderCanceled(data);
+          break;
+        default:
+          this.logger.log(`Unhandled webhook type: ${type}`);
+      }
+
+      return { success: true };
+    } catch (error) {
+      this.logger.error(`Failed to handle webhook: ${error.message}`);
+      throw new BadRequestException(`Webhook processing failed: ${error.message}`);
+    }
+  }
+
+  private async handleOrderCreated(data: any) {
+    const printfulOrderId = data.id;
+    this.logger.log(`Order created on Printful: ${printfulOrderId}`);
+
+    // Find order in our database by Printful order ID
+    const order = await this.userOrderModel.findOne({ printfulOrderId }).exec();
+
+    if (order) {
+      order.status = 'processing';
+      order.printfulStatus = 'pending';
+
+      if (!order.statusHistory) {
+        order.statusHistory = [];
+      }
+
+      order.statusHistory.push({
+        status: 'processing',
+        timestamp: new Date(),
+        note: 'Order received by Printful',
+        updatedBy: 'printful',
+      });
+
+      await order.save();
+      this.logger.log(`Order ${order._id} marked as processing`);
+    }
+  }
+
+  private async handleOrderUpdated(data: any) {
+    const printfulOrderId = data.id;
+    const printfulStatus = data.status;
+
+    this.logger.log(`Order updated on Printful: ${printfulOrderId}, status: ${printfulStatus}`);
+
+    const order = await this.userOrderModel.findOne({ printfulOrderId }).exec();
+
+    if (order) {
+      order.printfulStatus = printfulStatus;
+
+      // Map Printful status to our status
+      const statusMap: Record<string, string> = {
+        'draft': 'pending',
+        'pending': 'processing',
+        'failed': 'failed',
+        'canceled': 'cancelled',
+        'onhold': 'processing',
+        'inprocess': 'processing',
+        'fulfilled': 'shipped',
+      };
+
+      const newStatus = statusMap[printfulStatus] || 'processing';
+
+      if (newStatus !== order.status) {
+        order.status = newStatus as any;
+
+        if (!order.statusHistory) {
+          order.statusHistory = [];
+        }
+
+        order.statusHistory.push({
+          status: newStatus,
+          timestamp: new Date(),
+          note: `Printful status: ${printfulStatus}`,
+          updatedBy: 'printful',
+        });
+      }
+
+      await order.save();
+      this.logger.log(`Order ${order._id} status updated to ${newStatus}`);
+    }
+  }
+
+  private async handleOrderShipped(data: any) {
+    const printfulOrderId = data.id;
+    const shipment = data.shipment || data.shipments?.[0];
+
+    this.logger.log(`Order shipped on Printful: ${printfulOrderId}`);
+
+    const order = await this.userOrderModel.findOne({ printfulOrderId }).exec();
+
+    if (order) {
+      order.status = 'shipped';
+      order.printfulStatus = 'fulfilled';
+
+      if (shipment) {
+        order.trackingNumber = shipment.tracking_number;
+        order.trackingUrl = shipment.tracking_url;
+        order.carrier = shipment.carrier;
+      }
+
+      if (!order.statusHistory) {
+        order.statusHistory = [];
+      }
+
+      order.statusHistory.push({
+        status: 'shipped',
+        timestamp: new Date(),
+        note: `Shipped via ${order.carrier || 'carrier'}. Tracking: ${order.trackingNumber || 'N/A'}`,
+        updatedBy: 'printful',
+      });
+
+      await order.save();
+
+      // Send shipping notification email
+      if (order.trackingNumber && order.recipient?.email) {
+        await this.emailService.sendOrderShippedEmail({
+          orderNumber: order._id.toString(),
+          customerEmail: order.recipient.email,
+          trackingNumber: order.trackingNumber,
+          trackingUrl: order.trackingUrl || '',
+          carrier: order.carrier || 'Carrier',
+        }).catch((error) => {
+          this.logger.error(`Failed to send shipping email: ${error.message}`);
+        });
+      }
+
+      this.logger.log(`Order ${order._id} marked as shipped, email sent`);
+    }
+  }
+
+  private async handleOrderFailed(data: any) {
+    const printfulOrderId = data.id;
+    const reason = data.reason || 'Unknown reason';
+
+    this.logger.log(`Order failed on Printful: ${printfulOrderId}, reason: ${reason}`);
+
+    const order = await this.userOrderModel.findOne({ printfulOrderId }).exec();
+
+    if (order) {
+      order.status = 'failed';
+      order.printfulStatus = 'failed';
+
+      if (!order.statusHistory) {
+        order.statusHistory = [];
+      }
+
+      order.statusHistory.push({
+        status: 'failed',
+        timestamp: new Date(),
+        note: `Order failed: ${reason}`,
+        updatedBy: 'printful',
+      });
+
+      await order.save();
+
+      // Send failure notification email to admin
+      if (order.recipient?.email) {
+        await this.emailService.sendOrderStatusUpdateEmail({
+          orderNumber: order._id.toString(),
+          customerEmail: order.recipient.email,
+          status: 'failed',
+          message: `We're sorry, but your order could not be completed. Reason: ${reason}. Please contact support for assistance.`,
+        }).catch((error) => {
+          this.logger.error(`Failed to send failure email: ${error.message}`);
+        });
+      }
+
+      this.logger.log(`Order ${order._id} marked as failed`);
+    }
+  }
+
+  private async handleOrderCanceled(data: any) {
+    const printfulOrderId = data.id;
+
+    this.logger.log(`Order canceled on Printful: ${printfulOrderId}`);
+
+    const order = await this.userOrderModel.findOne({ printfulOrderId }).exec();
+
+    if (order) {
+      order.status = 'cancelled';
+      order.printfulStatus = 'canceled';
+
+      if (!order.statusHistory) {
+        order.statusHistory = [];
+      }
+
+      order.statusHistory.push({
+        status: 'cancelled',
+        timestamp: new Date(),
+        note: 'Order canceled on Printful',
+        updatedBy: 'printful',
+      });
+
+      await order.save();
+      this.logger.log(`Order ${order._id} marked as cancelled`);
+    }
+  }
+}

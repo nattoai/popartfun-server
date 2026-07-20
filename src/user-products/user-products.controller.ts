@@ -26,6 +26,11 @@ import {
   CreateCustomProductDto,
   UpdateCustomProductDto,
   CreateUserOrderDto,
+  CancelOrderDto,
+  CancelOrderResponseDto,
+  ReportProblemDto,
+  ReportProblemResponseDto,
+  OrderProblemDto,
 } from './dto';
 
 @ApiTags('User Products')
@@ -122,6 +127,89 @@ export class UserProductsController {
   })
   async getUserOrder(@User() user: AuthUser, @Param('id') id: string) {
     return this.userProductsService.getUserOrder(user.userId, id);
+  }
+
+  @Post('orders/:id/cancel')
+  @ApiOperation({
+    summary: 'Cancel an order',
+    description: 'Cancel an order that is still pending or processing. A refund will be automatically processed.',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Order cancelled successfully',
+    type: CancelOrderResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Order cannot be cancelled (already shipped/delivered)',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order not found',
+  })
+  async cancelOrder(
+    @User() user: AuthUser,
+    @Param('id') id: string,
+    @Body() cancelDto: CancelOrderDto,
+  ): Promise<CancelOrderResponseDto> {
+    return this.userProductsService.cancelOrder(user.userId, id, cancelDto);
+  }
+
+  @Post('orders/:id/report-problem')
+  @ApiOperation({
+    summary: 'Report a problem with an order',
+    description: 'Report an issue with a shipped or delivered order (damaged, wrong item, etc.)',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID' })
+  @ApiResponse({
+    status: 201,
+    description: 'Problem reported successfully',
+    type: ReportProblemResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Cannot report problem for this order status or already have an open report',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order not found',
+  })
+  async reportProblem(
+    @User() user: AuthUser,
+    @Param('id') id: string,
+    @Body() reportDto: ReportProblemDto,
+  ): Promise<ReportProblemResponseDto> {
+    return this.userProductsService.reportProblem(user.userId, id, reportDto);
+  }
+
+  @Get('orders/:id/problems')
+  @ApiOperation({
+    summary: 'Get problems for an order',
+    description: 'Retrieve all problem reports for a specific order',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of problem reports',
+    type: [OrderProblemDto],
+  })
+  async getOrderProblems(@User() user: AuthUser, @Param('id') id: string) {
+    return this.userProductsService.getOrderProblems(user.userId, id);
+  }
+
+  @Get('problems')
+  @ApiOperation({
+    summary: 'Get all user problems',
+    description: 'Retrieve all problem reports submitted by the user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of problem reports',
+    type: [OrderProblemDto],
+  })
+  async getUserProblems(@User() user: AuthUser) {
+    return this.userProductsService.getUserProblems(user.userId);
   }
 
   // ==================== CUSTOM PRODUCTS BY ID ====================

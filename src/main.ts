@@ -5,9 +5,21 @@ import { AppModule } from './app.module';
 import { json, urlencoded, raw, Request, Response, NextFunction } from 'express';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import helmet from 'helmet';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Security headers with helmet
+  app.use(helmet());
+
+  // Apply global interceptors
+  app.useGlobalInterceptors(new LoggingInterceptor());
+
+  // Apply global exception filter
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   // Enable CORS for webapp integration
   const allowedOrigins = process.env.CORS_ORIGINS
@@ -39,8 +51,9 @@ async function bootstrap() {
     optionsSuccessStatus: 200,
   });
 
-  // Raw body parsing for Stripe webhooks (must be before json middleware)
+  // Raw body parsing for webhooks (must be before json middleware)
   app.use('/api/v1/payments/webhook', raw({ type: 'application/json' }));
+  app.use('/api/v1/printful/webhook', raw({ type: 'application/json' }));
 
   // Increase JSON/body size limits to support base64-encoded image uploads
   app.use(json({ limit: '50mb' }));

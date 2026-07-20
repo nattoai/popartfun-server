@@ -1,5 +1,6 @@
 import { Controller, Post, Get, Body, Headers, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentIntentDto, UpdatePaymentIntentDto } from './dto/create-payment-intent.dto';
 import { AuthGuard } from '../auth/auth.guard';
@@ -13,6 +14,7 @@ export class PaymentsController {
   @Post('create-intent')
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // Stricter: 10 requests per minute for payment creation
   @ApiOperation({ summary: 'Create a payment intent for checkout' })
   @ApiResponse({ status: 201, description: 'Payment intent created successfully' })
   async createPaymentIntent(@Body() createPaymentIntentDto: CreatePaymentIntentDto) {
@@ -55,6 +57,7 @@ export class PaymentsController {
   }
 
   @Post('webhook')
+  @SkipThrottle() // Webhooks should not be rate limited - they come from Stripe
   @ApiOperation({ summary: 'Handle Stripe webhook events' })
   @ApiResponse({ status: 200, description: 'Webhook processed successfully' })
   async handleWebhook(

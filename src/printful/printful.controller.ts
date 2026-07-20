@@ -9,6 +9,8 @@ import {
   HttpStatus,
   UseInterceptors,
   UploadedFile,
+  Headers,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -21,6 +23,8 @@ import {
 } from '@nestjs/swagger';
 import { PrintfulService } from './printful.service';
 import { MockupService } from './mockup.service';
+import { Public } from '../auth/decorators/public.decorator';
+import type { Request } from 'express';
 import {
   CreatePrintfulConfigDto,
   PrintfulConfigResponseDto,
@@ -432,6 +436,26 @@ export class PrintfulController {
     @Body() dto: CalculateTaxDto,
   ): Promise<TaxCalculationResponseDto> {
     return this.printfulService.calculateTax(dto);
+  }
+
+  // ==================== Webhooks ====================
+
+  @Post('webhook')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Handle Printful webhook events',
+    description: 'Receive and process webhook notifications from Printful for order updates',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Webhook processed successfully',
+  })
+  async handleWebhook(
+    @Headers('x-printful-signature') signature: string,
+    @Body() payload: any,
+  ): Promise<{ success: boolean }> {
+    return this.printfulService.handleWebhook(signature, payload);
   }
 }
 
